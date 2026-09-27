@@ -3,7 +3,9 @@
 #include <stdlib.h>
 #include <sys/stat.h>
 #include <time.h>
-#include <config.h>
+#include <dirent.h>
+#include <errno.h>
+#include "config.h"
 
 /* ^^^^^^^^^^^^^^^^^ photosort.c ^^^^^^^^^^^^^^^^^
 Copy photos from an external drive and sort them
@@ -32,7 +34,16 @@ typedef struct FileContent {
 void *xmalloc(size_t size) {
 	void *ptr = malloc(size);
 	if (ptr == NULL) {
-		fprintf(stderr, "Out of memory allocating %ld bytes", size);
+		fprintf(stderr, "Out of memory allocating %zu bytes", size);
+		exit(1);
+	}
+	return ptr;
+}
+
+void *xcalloc(size_t nmemb, size_t size) {
+	void *ptr = calloc(nmemb, size);
+	if (ptr == NULL) {
+		fprintf(stderr, "Out of memory allocating %zu elements of %zu bytes", nmemb, size);
 		exit(1);
 	}
 	return ptr;
@@ -45,7 +56,7 @@ void *xmalloc(size_t size) {
 /* The allocation of fc->photos[i] is left to the caller. */
 FileContent *createFileContent(size_t n_photos) {
 	FileContent *fc = xmalloc(sizeof(*fc));
-	fc->photos = xmalloc(n_photos * sizeof(char *));
+	fc->photos = xcalloc(n_photos, sizeof(char *));
 	fc->len = n_photos;
 	return fc;
 };
@@ -102,7 +113,8 @@ void composeDestinationPath(const char *folder, const char *photo, char *buf) {
 
 // =============================== MAIN ======================================
 
-#define REMOVE_OPTION "r"
+#define HELP_OPTION "--help"
+#define REMOVE_OPTION "-r"
 #define PATHNAME_BUF_SIZE 100
 #define USER_MAX_LEN 20
 #define MAX_DATE_LEN 11
@@ -114,12 +126,12 @@ int main(int argc, char **argv) {
 	FileContent *fc = NULL;
 
 	if (argc < 2) {
-		fprintf(stderr, "Usage: %s <filename> [<option>]\n\
-						 Enter \"%s --help\" for more info.", argv[0], argv[0]);
+		fprintf(stderr, "Usage: %s <filename> [<option>]\n", argv[0]);
+		fprintf(stderr, "Enter \"%s --help\" for more info\n.", argv[0]);
 		exit(1);
 	}
 
-	if (strcmp(path, "help")) {
+	if (strcmp(path, HELP_OPTION) == 0) {
 		printf("Usage: %s <filename> [<option>]\n", argv[0]);
 
 		printf("Options:\n");
@@ -129,7 +141,7 @@ int main(int argc, char **argv) {
 
 		goto ClosingSequence;
 
-	} else if (strcmp(argv[2], REMOVE_OPTION))	{remove = 1;}
+	} else if (strcmp(argv[2], REMOVE_OPTION) == 0)	{remove = 1;}
 
 
 	// ----- COPY DATA FROM FILE TO MEMORY -----
@@ -156,6 +168,7 @@ int main(int argc, char **argv) {
 	for (size_t i=0; i < n_photos; i++) {
 		char buf[PHOTONAME_BUF_SIZE];
 		void *check = fgets(buf, sizeof(buf), fp);
+
 		if (!check) {status = 3; goto ClosingSequence;}
 
 		allocatePhoto(fc, i, sizeof(buf));
@@ -165,7 +178,7 @@ int main(int argc, char **argv) {
 	fclose(fp);
 	fp = NULL;
 
-
+	
 	// ----- COPY PHOTOS FROM PATH TO DIRECTORIES IN PC -----
 
 	// Retrieve user's name
@@ -203,20 +216,24 @@ int main(int argc, char **argv) {
 
 		printf("%s\n", date); //debug 
 
-		// Copy photo into "~/Pictures/macchinetta/$date"
+		// --- Copy photo into "~/Pictures/macchinetta/$date" ---
+
+		// Retrieve destination folder's name
 		char folder[strlen(HOME) + strlen(user) + strlen(SAVE_LOCATION) \
 					+ strlen(date) + strlen(MARK) + 1];
 		composeDestinationFolder(user, date, folder);
 
-		// Don't know if it will ever be used 
+		// Don't know if this will ever be used 
 		char destination_path[strlen(folder) + strlen(fc->photos[i]) + 1];
 		composeDestinationPath(folder, fc->photos[i], destination_path);
 
-		/*TODO:
-		int sorted=0
-		int removing_error = 0
-		for (foto) {
-			if (not already existing) create folder 
+		// Copy photo into destination folder
+		//TODO:
+		/*
+		int sorted=0;
+		int removing_error = 0;
+		if (photo) {
+			if (!) create folder 
 			if (error creating folder) {status = 6; goto ClosingSequence;}
 			if (photo already in folder) {continue;}
 			save photo in destination path
@@ -232,11 +249,11 @@ int main(int argc, char **argv) {
 				if (error removing photo) {removing_error = 1;}
 			}
 		}
-		printf("Photos: sorted %s, skipped %d", sorted, fc->len - sorted)
+		printf("Photos: sorted %s, skipped %d\n", sorted, fc->len - sorted);
 		if (removing_error = 1) {printf("Error removing photo(s) from media storage device.\n");}
-		print list of skipped photos
+		print list of skipped photos*/
 
-		*/
+
 	}
 
 
