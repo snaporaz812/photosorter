@@ -3,7 +3,6 @@
 #include <stdlib.h>
 #include <sys/stat.h>
 #include <time.h>
-//#include <dirent.h>
 #include <errno.h>
 #include <assert.h>
 #include "config.h"
@@ -27,7 +26,8 @@ enum ErrorCodes {
 	ERR_PH_TIME,
 	ERR_CREATING_FOLDER,
 	ERR_HANDLING_FOLDER,
-	ERR_FILE_W
+	ERR_FILE_W,
+	ERR_COPYING_PHOTO
 };
 
 
@@ -55,7 +55,7 @@ void *xmalloc(size_t size) {
 		exit(1);
 	}
 	return ptr;
-};
+}
 
 void *xcalloc(size_t nmemb, size_t size) {
 	void *ptr = calloc(nmemb, size);
@@ -64,7 +64,7 @@ void *xcalloc(size_t nmemb, size_t size) {
 		exit(1);
 	}
 	return ptr;
-};
+}
 
 
 // ============================= FileContent FUNCTIONS ============================= 
@@ -75,7 +75,7 @@ FileContent *createFileContent(size_t n_photos) {
 	fc->photos = xcalloc(n_photos, sizeof(char *));
 	fc->len = n_photos;
 	return fc;
-};
+}
 
 void destroyFileContent(FileContent *fc) {
 	for (size_t i=0; i < fc->len; i++) {
@@ -83,7 +83,7 @@ void destroyFileContent(FileContent *fc) {
 	}
 	if (fc->photos) {free(fc->photos); fc->photos = NULL;}
 	if (fc) {free(fc); fc = NULL;}
-};
+}
 
 
 // =================================== List FUNCTIONS ==================================
@@ -93,7 +93,7 @@ List *createList(size_t n_photos) {
 	l->elem = xcalloc(n_photos, sizeof(char *));
 	l->len = 0;
 	return l;
-};
+}
 
 void destroyList(List *l) {
 	for (int i=0; i < l->len; i++) {
@@ -101,7 +101,7 @@ void destroyList(List *l) {
 	}
 	if (l->elem) {free(l->elem); l->elem = NULL;}
 	if (l) {free(l); l = NULL;}
-};
+}
 
 // Set "entry" as the last element of the list "l".
 // RETURN VALUES: 0 if no errors occurred, -1 otherwise.
@@ -119,13 +119,13 @@ void removeLast(List *l) {
 	free(l->elem[l->len - 1]);
 	l->elem[l->len - 1] = NULL;
 	l->len--;
-};
+}
 
 void printList(List *l) {
 	for (int i=0; i < l->len; i++) {
 		printf("\t%s\n", l->elem[i]);
 	}
-};
+}
 
 // =========================== FUNCTIONS ================================
 
@@ -141,18 +141,29 @@ size_t countPhotos(FILE *fp) {
 	} while (check);
 	
 	return counter - 2;
-};
+}
 
 void copyBufferToFileContent(char *destination, char *source) {
 	source[strcspn(source, "\n")] = 0;
 	strcpy(destination, source);
-};
+}
+
+#define USER_START 7
+#define USER_MAX_LEN 20
+void retrieveUserName(const char *path, char *buf) {
+	int j=0;
+	while (j < USER_MAX_LEN - 1 && path[USER_START + j] != '/' && path[USER_START + j] != 0) {
+		buf[j] = path[USER_START + j]; // Skip "/media/"
+		j++;
+	}
+	buf[j] = 0;
+}
 
 // Compose photo's path (fc->path + "/" + fc->photos[i]) 
 void composePhotoPath(const char* path, const char *photo, char* buf) {
 	buf[0] = 0;
 	strcat(strcat(strcat(buf, path), "/"), photo);
-};
+}
 
 #define HOME "/home/"
 #define MARK "-PHOTOSORT/"
@@ -160,21 +171,51 @@ void composePhotoPath(const char* path, const char *photo, char* buf) {
 void composeDestinationFolder(const char *user, const char *date, char *buf) {
 	buf[0] = 0;
 	strcat(strcat(strcat(strcat(strcat(buf, HOME), user), SAVE_LOCATION), date), MARK);	
-};
+}
 
 void composeDestinationPath(const char *folder, const char *photo, char *buf) {
 	buf[0] = 0;
 	strcat(strcat(buf, folder), photo);
+}
+
+enum Options {
+	HELP,
+	REMOVE,
+	SOURCE,
+	DEST
 };
+#define HELP_OPTION "--help"
+#define REMOVE_OPTION "--remove"
+#define SOURCE_OPTION "--source"
+#define DEST_OPTION "--destination"
+// Return 0 if "string" is equal to any of the option's keywords, else 1.
+int strcmpOptions(const char *string, int option) {
+	switch (option) {
+	case HELP:
+		return (((strcmp(string, HELP_OPTION) == 0) || strcmp(string, "-h") == 0) ? 0 : 1);
+		break;
+	case REMOVE:
+		return (((strcmp(string, REMOVE_OPTION) == 0) || strcmp(string, "-r") == 0) ? 0 : 1);
+		break;
+	case SOURCE:
+		return (((strcmp(string, SOURCE_OPTION) == 0) || strcmp(string, "-s") == 0) ? 0 : 1);
+		break;
+	case DEST:
+		return (((strcmp(string, DEST_OPTION) == 0) || (strcmp(string, "--dest") == 0) \
+		|| strcmp(string, "-d") == 0) ? 0 : 1);
+		break;
+	
+	default:
+		return -1; 
+		break;
+	}
+}
 
 // =============================== MAIN ======================================
 
-#define HELP_OPTION "--help"
-#define REMOVE_OPTION "-r"
+
 #define PATHNAME_BUF_SIZE 100
-#define USER_MAX_LEN 20
 #define MAX_DATE_LEN 11
-#define USER_START 7
 #define CHUNK_SIZE (1024 * 8) // 8 KiB
 int main(int argc, char **argv) {
 	int status = 0;
@@ -185,24 +226,54 @@ int main(int argc, char **argv) {
 	List *skipped = NULL;
 	FILE *fp = NULL;
 
+
+	// ----- PARSING v2.0 -----
+
+	char ultimate_src3000[PATHNAME_BUF_SIZE];
+	ultimate_src3000[0] = 0;
+	char ultimate_dest3000[PATHNAME_BUF_SIZE];
+	ultimate_dest3000[0] = 0;
 	
 	if (argc < 2) {
-		fprintf(stderr, "Usage: %s <filename> [<option>]\n", argv[0]);
+		fprintf(stderr, "Usage: %s <filename> [<options>]\n", argv[0]);
 		fprintf(stderr, "Enter \"%s --help\" for more info.\n", argv[0]);
 		exit(1);
 
 	}
-	if (strcmp(argv[1], HELP_OPTION) == 0 || (argc > 2 && strcmp(argv[2], HELP_OPTION) == 0)) {
-		printf("Usage: %s <filename> [<option>]\n", argv[0]);
 
-		printf("Options:\n");
-		printf("\t\"%s\": print this screen.\n\n", HELP_OPTION);
-		printf("\t\"%s\":\tremove files from source media storage device\n",  REMOVE_OPTION);
-		printf("\t\tafter sorting them.\n");
 
-		goto ClosingSequence;
+	// Parse options
+	for (int i=1; i < argc; i++) {
+		if (strcmpOptions(argv[i], HELP) == 0) {
+			printf("Usage: %s <filename> [<options>]\n", argv[0]);
 
-	} else if (argc > 2 && strcmp(argv[2], REMOVE_OPTION) == 0)	{isRemove = 1;}
+			printf("Options:\n");
+			printf("\t\"%s\": print this screen.\n\n", HELP_OPTION);
+
+			printf("\t\"%s\":\tremove files from source directory after sorting them.\n\n",  REMOVE_OPTION);
+
+			printf("\t\"%s\":\tspecify source directory.\n\n",  SOURCE_OPTION);
+
+			printf("\t\"%s\":\tspecify destination directory.\n",  DEST_OPTION);
+
+			goto ClosingSequence;
+
+		} else if (strcmpOptions(argv[i], REMOVE) == 0) {
+			isRemove = 1;
+
+		} else if (strcmpOptions(argv[i], SOURCE) == 0) {
+			if ((i+1 < argc) && (strcmpOptions(argv[i+1], DEST) != 0)) {
+				strcpy(ultimate_src3000, argv[i+1]);
+			}
+
+		} else if (strcmpOptions(argv[i], DEST) == 0) {
+			if (i+1 < argc) {strcpy(ultimate_dest3000, argv[i+1]);}
+		}
+	}
+	
+	printf("(-d %s, -s %s, isRemove %d)\n", ultimate_dest3000, ultimate_src3000, isRemove); //debug
+	goto ClosingSequence; // debug
+	// */
 
 
 	// ----- COPY DATA FROM FILE TO MEMORY -----
@@ -219,8 +290,10 @@ int main(int argc, char **argv) {
 	// ----- SAVE PATH NAME -----
 
 	char pathbuf[PATHNAME_BUF_SIZE];
-	void *check = fgets(pathbuf, sizeof(pathbuf), fp);
-	if (!check) {status = ERR_PH_NAME_BIG; goto ClosingSequence;}
+	if (ultimate_src3000[0] == 0) { //FIXME: this version will eventually be deprecated (and I'll need to removed it)
+		void *check = fgets(pathbuf, sizeof(pathbuf), fp);
+		if (!check) {status = ERR_PH_NAME_BIG; goto ClosingSequence;}
+	} else strcpy(pathbuf, ultimate_src3000);
 	copyBufferToFileContent(fc->path, pathbuf);
 	
 
@@ -242,19 +315,12 @@ int main(int argc, char **argv) {
 	
 	// ----- COPY PHOTOS FROM PATH TO DIRECTORIES IN PC -----
 
-	// Retrieve user's name
 	printf("%s\n", fc->path);
 	char user[USER_MAX_LEN];
-	int i=0;
-
-	while (i < USER_MAX_LEN - 1 && fc->path[USER_START + i] != '/' && fc->path[USER_START + i] != 0) {
-		user[i] = fc->path[USER_START + i]; // Skip "/media/"
-		i++;
-	}
-	user[i] = 0;
-
+	retrieveUserName(fc->path, user); 
 
 	skipped = createList(n_photos);
+
 	for (size_t i=0; i < fc->len; i++) {
 		char *path = fc->path;
 		char *photo = fc->photos[i];
@@ -262,7 +328,6 @@ int main(int argc, char **argv) {
 		char src_path[strlen(path) + 1 + strlen(photo) + 1];
 
 		// Compose photo's path (fc->path + "/" + fc->photos[i]) 
-
 		composePhotoPath(path, photo, src_path);
 
 		// --- Retrieve photo's date ---
@@ -278,12 +343,15 @@ int main(int argc, char **argv) {
 		if (check_strftime == 0) {status = ERR_PH_TIME; goto ClosingSequence;}
 
 
-		// --- Copy photo into destination folder --- //FIXME
+		// --- Copy photo into destination folder ---
 
-		// Retrieve destination folder's name
-		char folder[strlen(HOME) + strlen(user) + strlen(SAVE_LOCATION) \
-					+ strlen(date) + strlen(MARK) + 1];
-		composeDestinationFolder(user, date, folder);
+		// Retrieve destination folder's name (or use user-specified path)
+		size_t dest_folder_len = (ultimate_dest3000[0] == 0) ? (strlen(HOME) + strlen(user) + strlen(SAVE_LOCATION) + strlen(date) + strlen(MARK) + 1) : strlen(ultimate_dest3000);
+
+		char folder[dest_folder_len];
+		if (ultimate_dest3000[0] == 0) {
+			composeDestinationFolder(user, date, folder); 
+		} else strcpy(folder, ultimate_dest3000);
 
 		// Create/Check folder
 		if (mkdir(folder, 0755) != 0) {
@@ -300,6 +368,7 @@ int main(int argc, char **argv) {
 			status = ERR_FILE_W; goto ClosingSequence;
 		} 
 		// FIXME: different photos with identical names count as the same 
+		// a partial fix could be checking if the bytesizes are identical
 
 		FILE *src_fp = fopen(src_path, "rb");
 		if (!src_fp) {status = ERR_FILE_R; goto ErrorHandling;}
@@ -310,7 +379,9 @@ int main(int argc, char **argv) {
 		size_t bytes_read;
 		while ((bytes_read = fread(chunk, 1, CHUNK_SIZE, src_fp)) > 0) {
 			if (fwrite(chunk, 1, bytes_read, dest_fp) != bytes_read) {
-				status = 255; goto ErrorHandling; //FIXME: usa un errore apposito
+				status = ERR_COPYING_PHOTO;
+				append(skipped, photo);
+				goto ErrorHandling;
 			}
 			byte_counter += bytes_read;
 		}
@@ -339,11 +410,12 @@ int main(int argc, char **argv) {
 ErrorHandling:
 		if (src_fp) fclose(src_fp);
 		if (dest_fp) fclose(dest_fp);
-		if (status != 0) {
+		if ((status != 0) && (status != ERR_COPYING_PHOTO)) {
 			remove(dest_path);
 			goto ClosingSequence;
-		}
-	} // for (photos in FileContent) --> copy
+		} else continue;
+	} // \for (photos in FileContent) --> copy
+
 
 	// ----- Print useful data before closing -----
 ClosingSequence:		
@@ -390,9 +462,27 @@ ClosingSequence:
 	case ERR_FILE_W:
 		fprintf(stderr, "Error while writing to a file.\n");
 		exit(1);
+	case ERR_COPYING_PHOTO:
+		fprintf(stderr, "Error while copying a photo.\n");
+		exit(1);
 
 	default:
 		fprintf(stderr, "Error.\n");
 		exit(1);
 	} 
 }
+
+
+
+	// /* //TODO: finish the parsing logic.
+
+	// Make sure that the script checks ultimate_source/dest3000.
+	// if (ultimate_source/dest3000[0] == 0) {use default variables*}
+	// *: that is, compose the paths using the current script's logic. 
+	// Else, assign ultimate_source/dest3000 to the right variables throughout the script.
+
+	// The code should be able to stop and throw error if wrong path names are given.
+	// That's why we do not check whether argv[1] is tmp.txt, or if after -d or -s a correct path
+	// is given. (one could input e.g. "./photosort -s -d ~/Desktop" without specifying -s)
+
+	// I should definitely rename ultimate_source/dest3000 to something decent
