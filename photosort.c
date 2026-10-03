@@ -3,7 +3,7 @@
 #include <stdlib.h>
 #include <sys/stat.h>
 #include <time.h>
-#include <dirent.h>
+//#include <dirent.h>
 #include <errno.h>
 #include <assert.h>
 #include "config.h"
@@ -17,10 +17,6 @@ the photo file names are written. Executing photosort.sh automatically creates
 the required .txt file, then runs the compiled version of this script.
 
 Enter "photosort --help" more info.
-*/
-
-/* TODO:
-* fix append()
 */
 
 enum ErrorCodes {
@@ -55,7 +51,7 @@ typedef struct List {
 void *xmalloc(size_t size) {
 	void *ptr = malloc(size);
 	if (ptr == NULL) {
-		fprintf(stderr, "Out of memory allocating %zu bytes", size);
+		fprintf(stderr, "Out of memory allocating %zu bytes\n", size);
 		exit(1);
 	}
 	return ptr;
@@ -64,7 +60,7 @@ void *xmalloc(size_t size) {
 void *xcalloc(size_t nmemb, size_t size) {
 	void *ptr = calloc(nmemb, size);
 	if (ptr == NULL) {
-		fprintf(stderr, "Out of memory allocating %zu elements of %zu bytes", nmemb, size);
+		fprintf(stderr, "Out of memory allocating %zu elements of %zu bytes\n", nmemb, size);
 		exit(1);
 	}
 	return ptr;
@@ -73,7 +69,6 @@ void *xcalloc(size_t nmemb, size_t size) {
 
 // ============================= FileContent FUNCTIONS ============================= 
 
-#define PHOTONAME_BUF_SIZE 50
 /* The allocation of fc->photos[i] is left to the caller. */
 FileContent *createFileContent(size_t n_photos) {
 	FileContent *fc = xmalloc(sizeof(*fc));
@@ -86,6 +81,7 @@ void destroyFileContent(FileContent *fc) {
 	for (size_t i=0; i < fc->len; i++) {
 		if (fc->photos[i]) {free(fc->photos[i]); fc->photos[i] = NULL;}
 	}
+	if (fc->photos) {free(fc->photos); fc->photos = NULL;}
 	if (fc) {free(fc); fc = NULL;}
 };
 
@@ -103,21 +99,24 @@ void destroyList(List *l) {
 	for (int i=0; i < l->len; i++) {
 		if (l->elem[i]) {free(l->elem[i]); l->elem[i] = NULL;}
 	}
+	if (l->elem) {free(l->elem); l->elem = NULL;}
 	if (l) {free(l); l = NULL;}
 };
 
 // Set "entry" as the last element of the list "l".
 // RETURN VALUES: 0 if no errors occurred, -1 otherwise.
-int append(List *l, char *entry) { //FIXME: out of index
-	if (!memcpy(l->elem[l->len - 1], entry, strlen(entry))) {return -1;}
-	l->len++;
+int append(List *l, const char *entry) {
+	char *copy = strdup(entry);
+	if (!copy) return -1;
+	l->elem[l->len++] = copy;
 	return 0;
-};
+}
 
 void removeLast(List *l) {
 	assert(l->len >= 0);
 	if (l->len == 0) return;
 
+	free(l->elem[l->len - 1]);
 	l->elem[l->len - 1] = NULL;
 	l->len--;
 };
@@ -130,6 +129,7 @@ void printList(List *l) {
 
 // =========================== FUNCTIONS ================================
 
+#define PHOTONAME_BUF_SIZE 100
 size_t countPhotos(FILE *fp) {
 	size_t counter = 0;
 	void *check;
@@ -143,9 +143,9 @@ size_t countPhotos(FILE *fp) {
 	return counter - 2;
 };
 
-void copyBufferToFileContent(char *destination, char *source) {	
-	memcpy(destination, source, strlen(source));
-	destination[strlen(source) - 1] = 0;
+void copyBufferToFileContent(char *destination, char *source) {
+	source[strcspn(source, "\n")] = 0;
+	strcpy(destination, source);
 };
 
 // Compose photo's path (fc->path + "/" + fc->photos[i]) 
@@ -155,7 +155,7 @@ void composePhotoPath(const char* path, const char *photo, char* buf) {
 };
 
 #define HOME "/home/"
-#define MARK " - PHOTOSORT/"
+#define MARK "-PHOTOSORT/"
 // Compose saving destination folder
 void composeDestinationFolder(const char *user, const char *date, char *buf) {
 	buf[0] = 0;
@@ -177,10 +177,10 @@ void composeDestinationPath(const char *folder, const char *photo, char *buf) {
 #define USER_START 7
 #define CHUNK_SIZE (1024 * 8) // 8 KiB
 int main(int argc, char **argv) {
-	char *path = argv[1];
 	int status = 0;
 	int isRemove = 0;
 	int sorted = 0;
+	int removing_error = 0;
 	FileContent *fc = NULL;
 	List *skipped = NULL;
 	FILE *fp = NULL;
@@ -192,7 +192,7 @@ int main(int argc, char **argv) {
 		exit(1);
 
 	}
-	if (strcmp(path, HELP_OPTION) == 0 || (argc > 2 && strcmp(argv[2], HELP_OPTION) == 0)) {
+	if (strcmp(argv[1], HELP_OPTION) == 0 || (argc > 2 && strcmp(argv[2], HELP_OPTION) == 0)) {
 		printf("Usage: %s <filename> [<option>]\n", argv[0]);
 
 		printf("Options:\n");
@@ -207,7 +207,7 @@ int main(int argc, char **argv) {
 
 	// ----- COPY DATA FROM FILE TO MEMORY -----
 
-	fp = fopen(path, "r");
+	fp = fopen(argv[1], "r");
 	if (!fp) {status = ERR_FILE_R; goto ClosingSequence;}
 
 	size_t n_photos = countPhotos(fp);
@@ -247,7 +247,7 @@ int main(int argc, char **argv) {
 	char user[USER_MAX_LEN];
 	int i=0;
 
-	while (fc->path[USER_START + i] != '/') {
+	while (i < USER_MAX_LEN - 1 && fc->path[USER_START + i] != '/' && fc->path[USER_START + i] != 0) {
 		user[i] = fc->path[USER_START + i]; // Skip "/media/"
 		i++;
 	}
@@ -255,10 +255,10 @@ int main(int argc, char **argv) {
 
 
 	skipped = createList(n_photos);
-	int removing_error = 0;
 	for (size_t i=0; i < fc->len; i++) {
 		char *path = fc->path;
 		char *photo = fc->photos[i];
+
 		char src_path[strlen(path) + 1 + strlen(photo) + 1];
 
 		// Compose photo's path (fc->path + "/" + fc->photos[i]) 
@@ -274,13 +274,11 @@ int main(int argc, char **argv) {
 		
 		char date[MAX_DATE_LEN];
 		date[0] = 0;
-		size_t check_strftime = strftime(date, MAX_DATE_LEN, "%Y%m%d", localtime(&ph_st.st_mtim.tv_sec));
+		size_t check_strftime = strftime(date, MAX_DATE_LEN, "%Y%m%d", localtime(&ph_st.st_mtime));
 		if (check_strftime == 0) {status = ERR_PH_TIME; goto ClosingSequence;}
 
 
 		// --- Copy photo into destination folder --- //FIXME
-
-		if (!photo) {continue;}
 
 		// Retrieve destination folder's name
 		char folder[strlen(HOME) + strlen(user) + strlen(SAVE_LOCATION) \
@@ -296,13 +294,15 @@ int main(int argc, char **argv) {
 		char dest_path[strlen(folder) + strlen(photo) + 1];
 		composeDestinationPath(folder, photo, dest_path);
 
-		FILE *dest_fp = fopen(dest_path, "rb");
-		if (dest_fp) {fclose(dest_fp); continue;} // Photo already exists
+		FILE *dest_fp = fopen(dest_path, "wbx");
+		if (!dest_fp) {
+			if (errno == EEXIST) continue; // Photo already exists
+			status = ERR_FILE_W; goto ClosingSequence;
+		} 
 		// FIXME: different photos with identical names count as the same 
 
-		dest_fp = fopen(dest_path, "wb");
 		FILE *src_fp = fopen(src_path, "rb");
-		if (!dest_fp || !src_fp) {status = ERR_FILE_R; goto ErrorHandling;}
+		if (!src_fp) {status = ERR_FILE_R; goto ErrorHandling;}
 
 		long byte_counter = 0;
 		char chunk[CHUNK_SIZE];
@@ -347,9 +347,11 @@ ErrorHandling:
 
 	// ----- Print useful data before closing -----
 ClosingSequence:		
-	printf("------------------------\n");
-	printf("Photos: sorted %d, skipped %zu\n", sorted, (fc->len - sorted));
-	if (skipped->len != 0) {
+	if (fc) {
+		printf("------------------------\n");
+		printf("Photos: sorted %d, skipped %zu\n", sorted, (fc->len - sorted));
+	}
+	if (skipped && skipped->len != 0) {
 		printf("Skipped:\n");
 		printList(skipped);
 	}
