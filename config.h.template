@@ -1,2 +1,2 @@
 // Middle of the destination path, between "/home/$USER/" and the sorted photo folders
-#define SAVE_LOCATION "/Pictures/macchinetta/"
+#define SAVE_LOCATION "/Pictures/camera/"
